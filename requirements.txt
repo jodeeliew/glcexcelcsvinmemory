@@ -1,0 +1,32 @@
+# Core web framework
+streamlit>=1.28.0
+
+# Data processing and manipulation
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Database and SQL
+sqlalchemy>=2.0.0
+
+# Excel file processing
+openpyxl
+xlrd>=2.0.1
+
+# LangChain and AI components
+langchain>=0.1.0
+langchain-openai>=0.0.8
+langchain-community>=0.0.20
+
+# OpenAI API
+openai>=1.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Additional utilities
+typing-extensions>=4.8.0
+pydantic>=2.0.0
+
+# For handling various file formats (backup dependencies)
+charset-normalizer>=3.0.0
+requests>=2.31.0
