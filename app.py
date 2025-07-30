@@ -47,6 +47,9 @@ class DatabaseManager:
             original_columns = df.columns.tolist()
             df.columns = [self._clean_column_name(col) for col in df.columns]
 
+            # Convert datetime and time columns to strings
+            df = self._convert_datetime_columns(df)
+
             # Generate table name from filename
             table_name = self._clean_table_name(filename)
 
@@ -92,6 +95,9 @@ class DatabaseManager:
                 df.columns = [self._clean_column_name(
                     col) for col in df.columns]
 
+                # Convert datetime and time columns to strings
+                df = self._convert_datetime_columns(df)
+
                 # Generate table name
                 base_name = self._clean_table_name(filename)
                 if len(excel_file.sheet_names) > 1:
@@ -124,6 +130,49 @@ class DatabaseManager:
         except Exception as e:
             st.error(f"Detailed error loading Excel {filename}: {str(e)}")
             raise Exception(f"Error loading Excel {filename}: {str(e)}")
+
+    def _convert_datetime_columns(self, df):
+        """Convert datetime and time columns to strings for SQLite compatibility"""
+        import datetime
+
+        for col in df.columns:
+            try:
+                # Check if column contains datetime.time, datetime.datetime, or pandas datetime objects
+                if df[col].dtype == 'object':
+                    # Sample a few non-null values to check the type
+                    sample_values = df[col].dropna()
+
+                if len(sample_values) > 0:
+                    first_val = sample_values.iloc[0]
+
+                    # Check if it's a time object
+                    if isinstance(first_val, datetime.time):
+                        df[col] = df[col].apply(
+                            lambda x: str(x) if pd.notnull(x) else None)
+                        continue
+
+                    # Check if it's a datetime object
+                    if isinstance(first_val, datetime.datetime):
+                        df[col] = df[col].apply(
+                            lambda x: str(x) if pd.notnull(x) else None)
+                        continue
+
+            # Handle pandas datetime columns
+                elif pd.api.types.is_datetime64_any_dtype(df[col]):
+                    df[col] = df[col].dt.strftime(
+                        '%Y-%m-%d %H:%M:%S').where(df[col].notnull(), None)
+
+            # Handle pandas time columns (if any exist)
+                elif hasattr(df[col].dtype, 'name') and 'time' in str(df[col].dtype).lower():
+                    df[col] = df[col].astype(str).where(
+                        df[col].notnull(), None)
+
+            except Exception as e:
+                # If there's any error processing this column, skip it and continue
+                print(f"Warning: Could not process column '{col}': {str(e)}")
+            continue
+
+        return df
 
     def _verify_table_creation(self, table_name):
         """Verify that a table was actually created in the database"""
@@ -342,20 +391,43 @@ SQL Query:"""
             col_mapping = ""
             if 'original_columns' in table and table['original_columns'] != table['columns']:
                 col_mapping = "\nColumn mapping (Original → SQL):\n"
-                for orig, clean in zip(table['original_columns'], table['columns']):
-                    if orig != clean:
-                        col_mapping += f"  '{orig}' → {clean}\n"
+            for orig, clean in zip(table['original_columns'], table['columns']):
+                if orig != clean:
+                    col_mapping += f"  '{orig}' → {clean}\n"
 
-            table_info = f"""
+        # Convert sample data to JSON-serializable format
+        sample_data_serializable = self._make_json_serializable(
+            table['sample_data'])
+
+        table_info = f"""
 Table: {table['table_name']} (from file: {table['filename']})
 SQL Columns: {', '.join(table['columns'])}{col_mapping}
 Rows: {table['shape'][0]}, Columns: {table['shape'][1]}
-Sample data: {json.dumps(table['sample_data'], indent=2)}
+Sample data: {json.dumps(sample_data_serializable, indent=2, default=str)}
 
 IMPORTANT: Use the EXACT table name "{table['table_name']}" and the SQL column names shown above in your queries.
 """
-            formatted.append(table_info)
+        formatted.append(table_info)
         return '\n'.join(formatted)
+
+    def _make_json_serializable(self, data):
+        """Convert data to JSON serializable format"""
+        import pandas as pd
+        import datetime
+
+        if isinstance(data, list):
+            return [self._make_json_serializable(item) for item in data]
+        elif isinstance(data, dict):
+            return {key: self._make_json_serializable(value) for key, value in data.items()}
+        elif isinstance(data, (pd.Timestamp, datetime.datetime, datetime.date, datetime.time)):
+            return str(data)
+        elif pd.isna(data):
+            return None
+        elif isinstance(data, (int, float, str, bool, type(None))):
+            return data
+        else:
+            # For any other type, convert to string
+            return str(data)
 
     def _format_chat_history(self):
         """Format chat history for context"""
