@@ -43,11 +43,28 @@ class DatabaseManager:
             # Read CSV with pandas
             df = pd.read_csv(io.StringIO(file_bytes.decode('utf-8')))
 
+            # Debug: Print original columns and data types
+            print(f"Original columns in {filename}: {df.columns.tolist()}")
+            print(f"Data types: {df.dtypes.to_dict()}")
+
             # Clean column names (remove spaces, special chars)
             original_columns = df.columns.tolist()
             df.columns = [self._clean_column_name(col) for col in df.columns]
 
-            # Convert datetime and time columns to strings
+            # Debug: Print cleaned columns
+            print(f"Cleaned columns: {df.columns.tolist()}")
+
+            # Check for potential rental hours columns
+            rental_cols = [col for col in df.columns if 'rental' in col.lower() and (
+                'hour' in col.lower() or 'hr' in col.lower())]
+            if rental_cols:
+                print(f"Found potential rental hours columns: {rental_cols}")
+                # Check data types of these columns
+                for col in rental_cols:
+                    print(
+                        f"Column {col} dtype: {df[col].dtype}, sample values: {df[col].head().tolist()}")
+
+            # Convert datetime and time columns to strings (but preserve numeric columns)
             df = self._convert_datetime_columns(df)
 
             # Generate table name from filename
@@ -70,6 +87,9 @@ class DatabaseManager:
             # Verify table was created
             self._verify_table_creation(table_name)
 
+            # Debug table structure
+            self.debug_table_structure(table_name)
+
             return table_name, df.shape
 
         except Exception as e:
@@ -77,7 +97,7 @@ class DatabaseManager:
             raise Exception(f"Error loading CSV {filename}: {str(e)}")
 
     def load_excel_file(self, file_bytes, filename):
-        """Load Excel file into database (all sheets)"""
+        """Load Excel file into database (all sheets) with better debugging"""
         try:
             # Read Excel file
             excel_file = pd.ExcelFile(io.BytesIO(file_bytes))
@@ -90,12 +110,31 @@ class DatabaseManager:
                 if df.empty:
                     continue
 
+                # Debug: Print original columns
+                print(
+                    f"Original columns in {filename}/{sheet_name}: {df.columns.tolist()}")
+                print(f"Data types: {df.dtypes.to_dict()}")
+
                 # Clean column names
                 original_columns = df.columns.tolist()
                 df.columns = [self._clean_column_name(
                     col) for col in df.columns]
 
-                # Convert datetime and time columns to strings
+                # Debug: Print cleaned columns
+                print(f"Cleaned columns: {df.columns.tolist()}")
+
+                # Check for potential rental hours columns
+                rental_cols = [col for col in df.columns if 'rental' in col.lower() and (
+                    'hour' in col.lower() or 'hr' in col.lower())]
+                if rental_cols:
+                    print(
+                        f"Found potential rental hours columns: {rental_cols}")
+                    # Check data types of these columns
+                    for col in rental_cols:
+                        print(
+                            f"Column {col} dtype: {df[col].dtype}, sample values: {df[col].head().tolist()}")
+
+                # Convert datetime and time columns to strings (but preserve numeric columns)
                 df = self._convert_datetime_columns(df)
 
                 # Generate table name
@@ -123,6 +162,9 @@ class DatabaseManager:
                 # Verify table was created
                 self._verify_table_creation(table_name)
 
+                # Debug table structure
+                self.debug_table_structure(table_name)
+
                 loaded_tables.append((table_name, df.shape))
 
             return loaded_tables
@@ -132,7 +174,7 @@ class DatabaseManager:
             raise Exception(f"Error loading Excel {filename}: {str(e)}")
 
     def _convert_datetime_columns(self, df):
-        """Convert datetime and time columns to strings for SQLite compatibility"""
+        """Convert datetime and time columns to strings for SQLite compatibility while preserving numeric columns"""
         import datetime
 
         for col in df.columns:
@@ -142,35 +184,50 @@ class DatabaseManager:
                     # Sample a few non-null values to check the type
                     sample_values = df[col].dropna()
 
-                if len(sample_values) > 0:
-                    first_val = sample_values.iloc[0]
+                    if len(sample_values) > 0:
+                        first_val = sample_values.iloc[0]
 
-                    # Check if it's a time object
-                    if isinstance(first_val, datetime.time):
-                        df[col] = df[col].apply(
-                            lambda x: str(x) if pd.notnull(x) else None)
-                        continue
+                        # IMPORTANT: Skip numeric values that might look like times
+                        # Don't convert if it's actually a number (like rental hours)
+                        if isinstance(first_val, (int, float)):
+                            print(
+                                f"Skipping numeric column '{col}' in datetime conversion")
+                            continue
 
-                    # Check if it's a datetime object
-                    if isinstance(first_val, datetime.datetime):
-                        df[col] = df[col].apply(
-                            lambda x: str(x) if pd.notnull(x) else None)
-                        continue
+                        # Check if it's a time object
+                        if isinstance(first_val, datetime.time):
+                            print(f"Converting time column '{col}' to string")
+                            df[col] = df[col].apply(
+                                lambda x: str(x) if pd.notnull(x) else None)
+                            continue
 
-            # Handle pandas datetime columns
+                        # Check if it's a datetime object
+                        if isinstance(first_val, datetime.datetime):
+                            print(
+                                f"Converting datetime column '{col}' to string")
+                            df[col] = df[col].apply(
+                                lambda x: str(x) if pd.notnull(x) else None)
+                            continue
+
+                # Handle pandas datetime columns
                 elif pd.api.types.is_datetime64_any_dtype(df[col]):
+                    print(
+                        f"Converting pandas datetime column '{col}' to string")
                     df[col] = df[col].dt.strftime(
                         '%Y-%m-%d %H:%M:%S').where(df[col].notnull(), None)
 
-            # Handle pandas time columns (if any exist)
+                # Handle pandas time columns (if any exist)
                 elif hasattr(df[col].dtype, 'name') and 'time' in str(df[col].dtype).lower():
-                    df[col] = df[col].astype(str).where(
-                        df[col].notnull(), None)
+                    # Only convert if it's actually a time column, not numeric
+                    if not pd.api.types.is_numeric_dtype(df[col]):
+                        print(f"Converting time column '{col}' to string")
+                        df[col] = df[col].astype(str).where(
+                            df[col].notnull(), None)
 
             except Exception as e:
                 # If there's any error processing this column, skip it and continue
                 print(f"Warning: Could not process column '{col}': {str(e)}")
-            continue
+                continue
 
         return df
 
@@ -189,18 +246,32 @@ class DatabaseManager:
             raise
 
     def _clean_column_name(self, col_name):
-        """Clean column name for SQL compatibility"""
+        """Clean column name for SQL compatibility while preserving meaning"""
         # Convert to string and strip whitespace
         clean_name = str(col_name).strip()
-        # Replace spaces and special characters with underscores
-        clean_name = re.sub(r'[^\w]', '_', clean_name)
-        # Remove multiple underscores
-        clean_name = re.sub(r'_+', '_', clean_name)
+
+        # Handle common patterns first
+        if 'rental' in clean_name.lower() and ('hour' in clean_name.lower() or 'hr' in clean_name.lower()):
+            # Preserve rental hours meaning
+            # Remove special chars but keep spaces
+            clean_name = re.sub(r'[^\w\s]', '', clean_name)
+            # Replace spaces with underscores
+            clean_name = re.sub(r'\s+', '_', clean_name)
+            clean_name = clean_name.lower()
+        else:
+            # Standard cleaning for other columns
+            # Replace spaces and special characters with underscores
+            clean_name = re.sub(r'[^\w]', '_', clean_name)
+            # Remove multiple underscores
+            clean_name = re.sub(r'_+', '_', clean_name)
+
         # Remove leading/trailing underscores
         clean_name = clean_name.strip('_')
+
         # Ensure it doesn't start with a number
         if clean_name and clean_name[0].isdigit():
             clean_name = f"col_{clean_name}"
+
         return clean_name or "unnamed_column"
 
     def _clean_table_name(self, filename):
@@ -224,14 +295,23 @@ class DatabaseManager:
         return table_name
 
     def execute_query(self, query):
-        """Execute SQL query and return results"""
+        """Execute SQL query and return results with debugging"""
         try:
             connection = self.get_connection()
+
+            # Debug: Print the query being executed
+            print(f"\nDEBUG: Executing query: {query}")
+
             result = connection.execute(text(query))
             columns = list(result.keys())
             rows = result.fetchall()
+
+            print(
+                f"DEBUG: Query returned {len(rows)} rows with columns: {columns}")
+
             return columns, rows
         except Exception as e:
+            print(f"DEBUG: Query execution error: {str(e)}")
             # Try to reconnect and retry once
             try:
                 self._connection = None
@@ -242,6 +322,49 @@ class DatabaseManager:
                 return columns, rows
             except Exception as retry_error:
                 raise Exception(f"SQL Error: {str(retry_error)}")
+
+    def debug_table_structure(self, table_name):
+        """Debug helper to understand table structure"""
+        try:
+            connection = self.get_connection()
+
+            # Get table info
+            pragma_result = connection.execute(
+                text(f"PRAGMA table_info({table_name})"))
+            columns_info = pragma_result.fetchall()
+
+            print(f"\nDEBUG: Table structure for {table_name}:")
+            for col_info in columns_info:
+                print(f"  Column: {col_info[1]}, Type: {col_info[2]}")
+
+            # Get sample data
+            sample_result = connection.execute(
+                text(f"SELECT * FROM {table_name} LIMIT 5"))
+            sample_rows = sample_result.fetchall()
+            sample_columns = list(sample_result.keys())
+
+            print(f"\nSample data:")
+            for i, row in enumerate(sample_rows):
+                print(f"  Row {i+1}: {dict(zip(sample_columns, row))}")
+
+            # Look for rental-related columns
+            rental_columns = [
+                col for col in sample_columns if 'rental' in col.lower() or 'hour' in col.lower()]
+            if rental_columns:
+                print(f"\nFound rental/hour columns: {rental_columns}")
+                for col in rental_columns:
+                    try:
+                        numeric_test = connection.execute(
+                            text(f"SELECT {col} FROM {table_name} WHERE {col} IS NOT NULL LIMIT 5"))
+                        values = [row[0] for row in numeric_test.fetchall()]
+                        print(f"  {col} sample values: {values}")
+                        print(
+                            f"  {col} value types: {[type(v).__name__ for v in values]}")
+                    except Exception as e:
+                        print(f"  Error checking {col}: {e}")
+
+        except Exception as e:
+            print(f"Debug error: {e}")
 
     def close_connection(self):
         """Close database connection"""
@@ -262,7 +385,8 @@ class DatabaseManager:
                 'columns': info['columns'],
                 'original_columns': info.get('original_columns', info['columns']),
                 'shape': info['shape'],
-                'sample_data': info['sample_data'][:2]  # Limit sample data
+                'sample_data': info['sample_data'][:2],  # Limit sample data
+                'dtypes': info.get('dtypes', {})
             })
         return schema_info
 
@@ -355,6 +479,8 @@ CRITICAL RULES:
 9. Handle case-insensitive searches when relevant using LOWER()
 10. Table names are case-sensitive - use them exactly as shown
 11. Column names shown are already cleaned for SQL - use them as-is
+12. For numeric comparisons (like hours < 30), use numeric operators directly
+13. Pay attention to column data types - use numeric columns for numeric comparisons
 
 User Question: {question}
 
@@ -381,7 +507,7 @@ SQL Query:"""
             raise Exception(f"Error generating query: {str(e)}")
 
     def _format_schema_info(self, schema_info):
-        """Format schema information for the LLM prompt"""
+        """Format schema information for the LLM prompt with better column mapping"""
         if not schema_info:
             return "No tables available"
 
@@ -389,25 +515,42 @@ SQL Query:"""
         for table in schema_info:
             # Show both original and cleaned column names for context
             col_mapping = ""
-            if 'original_columns' in table and table['original_columns'] != table['columns']:
-                col_mapping = "\nColumn mapping (Original → SQL):\n"
-            for orig, clean in zip(table['original_columns'], table['columns']):
-                if orig != clean:
-                    col_mapping += f"  '{orig}' → {clean}\n"
 
-        # Convert sample data to JSON-serializable format
-        sample_data_serializable = self._make_json_serializable(
-            table['sample_data'])
+            if 'original_columns' in table and table['original_columns']:
+                col_mapping = "\nColumn mapping (Original → SQL Name → Data Type → Sample Data):\n"
+                for i, (orig, clean) in enumerate(zip(table['original_columns'], table['columns'])):
+                    # Get sample value for this column
+                    sample_val = "N/A"
+                    if table['sample_data'] and len(table['sample_data']) > 0:
+                        sample_val = table['sample_data'][0].get(clean, "N/A")
 
-        table_info = f"""
+                    # Check data type
+                    dtype = table.get('dtypes', {}).get(clean, 'unknown')
+
+                    col_mapping += f"  '{orig}' → {clean} (type: {dtype}, sample: {sample_val})\n"
+
+                    # Highlight potential rental hours columns
+                    if 'rental' in orig.lower() and ('hour' in orig.lower() or 'hr' in orig.lower()):
+                        col_mapping += f"    *** RENTAL HOURS COLUMN - Use for hour-based queries ***\n"
+
+            # Convert sample data to JSON-serializable format
+            sample_data_serializable = self._make_json_serializable(
+                table['sample_data'])
+
+            table_info = f"""
 Table: {table['table_name']} (from file: {table['filename']})
-SQL Columns: {', '.join(table['columns'])}{col_mapping}
+SQL Column Names (use these in queries): {', '.join(table['columns'])}{col_mapping}
 Rows: {table['shape'][0]}, Columns: {table['shape'][1]}
-Sample data: {json.dumps(sample_data_serializable, indent=2, default=str)}
+Sample data (first 3 rows): {json.dumps(sample_data_serializable, indent=2, default=str)}
 
-IMPORTANT: Use the EXACT table name "{table['table_name']}" and the SQL column names shown above in your queries.
+CRITICAL: 
+- Use EXACTLY these SQL column names: {table['columns']}
+- For rental hours queries, look for columns containing 'rental' and 'hour'
+- Use numeric comparisons (< > = etc.) for hour-based columns
+- Table name is: "{table['table_name']}"
 """
-        formatted.append(table_info)
+            formatted.append(table_info)
+
         return '\n'.join(formatted)
 
     def _make_json_serializable(self, data):
@@ -674,6 +817,10 @@ def display_chat_history():
             with st.chat_message("assistant"):
                 st.write(answer)
 
+                # if query:
+                #     with st.expander("🔍 Generated SQL Query"):
+                #         st.code(query, language="sql")
+
                 if results is not None and not results.empty:
                     with st.expander("📊 Query Results"):
                         st.dataframe(results, use_container_width=True)
@@ -754,9 +901,27 @@ def main():
                     st.write(
                         f"**Dimensions:** {info['shape'][0]} rows × {info['shape'][1]} columns")
                     st.write(f"**SQL Columns:** {', '.join(info['columns'])}")
-                    if 'original_columns' in info:
-                        st.write(
-                            f"**Original Columns:** {', '.join(info['original_columns'])}")
+                    if 'original_columns' in info and info['original_columns'] != info['columns']:
+                        st.write("**Column Mapping:**")
+                        for orig, clean in zip(info['original_columns'], info['columns']):
+                            if orig != clean:
+                                st.write(f"  • '{orig}' → {clean}")
+
+                    # Show data types for important columns
+                    if 'dtypes' in info:
+                        rental_cols = [col for col in info['columns'] if 'rental' in col.lower(
+                        ) and 'hour' in col.lower()]
+                        if rental_cols:
+                            st.write("**Rental Hours Columns:**")
+                            for col in rental_cols:
+                                dtype = info['dtypes'].get(col, 'unknown')
+                                st.write(f"  • {col} (type: {dtype})")
+
+        # Clear chat history button
+        if st.button("🗑️ Clear Chat History"):
+            st.session_state.chat_history = []
+            st.session_state.query_generator.chat_history = []
+            st.rerun()
 
         # Tips section
         st.subheader("💡 Query Examples")
@@ -775,6 +940,7 @@ def main():
         - "Show sales greater than 1000"
         - "Find customers in New York"
         - "Products with price between 10 and 50"
+        - "Find items with rental hours less than 30"
         
         **Sorting:**
         - "Top 10 customers by revenue"
@@ -782,10 +948,22 @@ def main():
         - "Products sorted by price desc"
         """)
 
+        # Debug section (can be removed in production)
+        if st.checkbox("🔧 Debug Mode"):
+            st.subheader("Debug Information")
+            if st.session_state.db_manager.tables_info:
+                for table_name, info in st.session_state.db_manager.tables_info.items():
+                    st.write(f"**{table_name}:**")
+                    st.json({
+                        'columns': info['columns'],
+                        'dtypes': info.get('dtypes', {}),
+                        'sample_data': info['sample_data'][0] if info['sample_data'] else {}
+                    })
+
     # Main chat interface
     user_question = st.text_input(
         "Ask a question about your data:",
-        placeholder="e.g., What's the total sales by region? Show me the top 10 customers by revenue.",
+        placeholder="e.g., What's the total sales by region? Show me the top 10 customers by revenue. Find items with rental hours less than 30.",
         key=f"user_input_{st.session_state.input_key}"
     )
 
@@ -807,6 +985,9 @@ def main():
 
     # Display chat history
     display_chat_history()
+
+    # Footer
+    st.markdown("---")
 
 
 if __name__ == '__main__':
